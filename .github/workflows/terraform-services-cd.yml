@@ -34,7 +34,7 @@
 #
 # =============================================================================
 
-name: services CD
+name: Terraform services CD
 
 on:
   pull_request:
