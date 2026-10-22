@@ -8,8 +8,8 @@ Incluye el script [`push-image.sh`](push-image.sh), que **construye o copia, sub
 |---|---|
 | **Paso en el despliegue** | **4** – crear y **subir las imágenes** antes de los servicios ([guía](../README.md#guía-de-despliegue-paso-a-paso)) |
 | **Depende de** | Bucket del state ([`S3-tfstate-backend-module`](../S3-tfstate-backend-module/README.md)) |
-| **Lo usan** | [`ECS-services-module`](../ECS-services-module/README.md) (servicios con `ecr_repository`) y el script `push-image.sh` |
-| **Recursos (`plan`)** | 2 por repositorio (12 hoy) |
+| **Lo usan** | [`ECS-services-module`](../ECS-services-module/README.md) (servicios con `ecr_repository`), el script `push-image.sh`, el [`GitHub-OIDC-module`](../GitHub-OIDC-module/README.md) (permisos de los roles del CI) y el workflow `countdown-new-year-ci.yml` |
+| **Recursos (`plan`)** | 2 por repositorio (4 hoy) |
 | **Tiempo de despliegue** | ~1 min + 1–2 min por imagen subida |
 | **Costo principal** | Almacenamiento de imágenes por GB (mínimo) |
 
@@ -44,18 +44,12 @@ Incluye el script [`push-image.sh`](push-image.sh), que **construye o copia, sub
 
 ## ¿Qué se crea?
 
-**Un repositorio privado por imagen**, definido en [`ecr.auto.tfvars`](manifests/ecr.auto.tfvars). Hoy hay uno por cada servicio de prueba y uno por cada imagen de la tienda online:
+**Un repositorio privado por imagen**, definido en [`ecr.auto.tfvars`](manifests/ecr.auto.tfvars). Hoy hay dos: el del servicio de prueba `nginx-1` y el de la app `countdown-new-year` (lo llena su CI de GitHub Actions):
 
 | Repositorio | Nombre completo en ECR | Se construye con | Lo usa |
 |---|---|---|---|
 | `nginx-1` | `cloudengineering-dev/nginx-1` | `--from public.ecr.aws/nginx/nginx:stable-alpine` | [`services/nginx-1`](../ECS-services-module/services/nginx-1/manifests/service.auto.tfvars) |
-| `nginx-2` | `cloudengineering-dev/nginx-2` | `--from public.ecr.aws/nginx/nginx:stable-alpine` | Ningún servicio todavía |
-| `web` | `cloudengineering-dev/web` | `apps/online-store/frontend` (`--build-arg API_INTERNAL_URL=http://api:4000`) | Ningún servicio todavía |
-| `api` | `cloudengineering-dev/api` | `apps/online-store/backend` `--target api` | Ningún servicio todavía |
-| `worker` | `cloudengineering-dev/worker` | `apps/online-store/backend` `--target worker` | Ningún servicio todavía |
-| `migrate` | `cloudengineering-dev/migrate` | `apps/online-store/backend` `--target migrate` | Ningún servicio todavía |
-
-> ⚠️ El código de la tienda (`apps/online-store/`) **no está en este repositorio**: hoy solo se pueden subir las imágenes que se copian con `--from` (nginx). Los repositorios `web`, `api`, `worker`, `migrate` y `nginx-2` se crean vacíos.
+| `countdown-new-year` | `cloudengineering-dev/countdown-new-year` | El CI [`countdown-new-year-ci.yml`](../../.github/workflows/countdown-new-year-ci.yml) (`apps/countdown-new-year`), con el rol `CloudEngineering-dev-gha-countdown-new-year` | Ningún servicio todavía |
 
 Cada repositorio se crea con:
 
@@ -66,7 +60,7 @@ Cada repositorio se crea con:
 | **Cifrado** | `AES256` | Las imágenes se guardan cifradas |
 | **Ciclo de vida** | Se borran las imágenes sin tag a los **7 días** y se conservan las **10** más recientes | No acumular imágenes viejas (ni pagar por ellas) |
 
-El `plan` crea **2 recursos por repositorio**: el repositorio y su política de ciclo de vida. Hoy son **12** (6 repositorios).
+El `plan` crea **2 recursos por repositorio**: el repositorio y su política de ciclo de vida. Hoy son **4** (2 repositorios).
 
 > 💡 **Analogía:** el ECR es el **almacén** de la empresa. Cada aplicación tiene su **estantería** (repositorio) y cada versión es una **caja sellada** con una etiqueta (tag).
 > - Una caja etiquetada `1.0.0` no se puede volver a abrir ni cambiar (IMMUTABLE).
@@ -100,20 +94,20 @@ flowchart LR
 
     subgraph ecr["ECR privado (ECR-module)"]
         r1[("cloudengineering-dev/nginx-1<br/>1.0.0 → sha256:…")]
-        r2[("cloudengineering-dev/nginx-2<br/>1.0.0 → sha256:…")]
+        r2[("cloudengineering-dev/countdown-new-year<br/>1.0.0-e60567f → sha256:…")]
         scan["Escaneo<br/>(scan on push)"]
     end
 
     subgraph ecs["ECS (ECS-services-module)"]
         s1["Servicio nginx-1<br/>image = …/nginx-1@sha256:…"]
-        s2["Servicio nginx-2 (futuro, aún no existe)<br/>image = …/nginx-2@sha256:…"]
     end
 
-    dev -- "push-image.sh<br/>(build/copia + push)" --> r1 & r2
+    gha(("GitHub Actions<br/>countdown-new-year-ci"))
+    dev -- "push-image.sh<br/>(build/copia + push)" --> r1
+    gha -- "docker push (rol OIDC)" --> r2
     src -.-> dev
     r1 & r2 --> scan
     r1 -- "pull (NAT)" --> s1
-    r2 -- "pull (NAT)" --> s2
 ```
 
 **Flujo completo:**
@@ -134,7 +128,7 @@ flowchart LR
 module "ecr" {
   source   = "terraform-aws-modules/ecr/aws"
   version  = "3.2.0"
-  for_each = var.repositories                                   # nginx-1, nginx-2, ...
+  for_each = var.repositories                                   # nginx-1, countdown-new-year
 
   repository_name                 = "${local.repo_prefix}/${each.key}"   # cloudengineering-dev/nginx-1
   repository_image_tag_mutability = each.value.image_tag_mutability      # IMMUTABLE
@@ -162,6 +156,7 @@ Lo usan:
 | Quién | Qué lee |
 |---|---|
 | [`push-image.sh`](push-image.sh) | `registry_url` y `repository_names`, con `terraform output` |
+| [`GitHub-OIDC-module`](../GitHub-OIDC-module/README.md) | `repository_arns`, para limitar cada rol del CI a los repositorios de su app |
 | Servicios de [`ECS-services-module`](../ECS-services-module/README.md) con `ecr_repository` | `repository_urls` y `repository_names` de su state en S3 (`ECR-module/terraform.tfstate`), y en AWS la imagen y su digest |
 
 ---
@@ -202,7 +197,7 @@ ECR-module/
 | Variable | Valor actual | Descripción |
 |---|---|---|
 | `aws_region` / `environment` / `business_division` | `us-east-1` / `dev` / `CloudEngineering` | Generales; deben coincidir con los otros módulos |
-| `repositories` | `{ nginx-1, nginx-2, web, api, worker, migrate }` | Un repositorio por clave. Opciones por repositorio: `image_tag_mutability` (`IMMUTABLE` por defecto) y `max_image_count` |
+| `repositories` | `{ nginx-1, countdown-new-year }` | Un repositorio por clave. Opciones por repositorio: `image_tag_mutability` (`IMMUTABLE` por defecto) y `max_image_count` |
 | `ecr_max_image_count` | `10` | Imágenes que se conservan por repositorio |
 | `ecr_untagged_expire_days` | `7` | Días tras los que se borran las imágenes sin tag |
 | `ecr_force_delete` | `true` (laboratorio) | `true`: `destroy` borra repositorios con imágenes. **Producción: `false`** |
@@ -210,10 +205,9 @@ ECR-module/
 **Añadir un repositorio:**
 ```hcl
 repositories = {
-  nginx-1 = {}
-  nginx-2 = {}
-  # ...web, api, worker, migrate...
-  mi-api  = {}                         # nuevo
+  nginx-1            = {}
+  countdown-new-year = {}
+  mi-api             = {}              # nuevo
   # mi-worker = { max_image_count = 20 }
 }
 ```
@@ -228,7 +222,7 @@ Después ejecuta `terraform apply` en `ECR-module/manifests`.
 | `registry_url` | `373716886058.dkr.ecr.us-east-1.amazonaws.com` | `docker login` y `push-image.sh` |
 | `repository_urls` | `{ nginx-1 = "…/cloudengineering-dev/nginx-1", … }` | `push-image.sh` y los servicios (para construir la URI de la imagen) |
 | `repository_names` | `{ nginx-1 = "cloudengineering-dev/nginx-1", … }` | `push-image.sh` y los servicios (para buscar la imagen y su digest) |
-| `repository_arns` | `{ nginx-1 = "arn:aws:ecr:…", … }` | Políticas IAM, pipelines |
+| `repository_arns` | `{ nginx-1 = "arn:aws:ecr:…", … }` | `GitHub-OIDC-module` (política de cada rol del CI) |
 
 ---
 
@@ -245,8 +239,8 @@ terraform plan
 
 | Prueba | Resultado |
 |---|---|
-| `ECR-module`: `fmt`, `validate`, `plan` | `Plan: 12 to add`: `cloudengineering-dev/nginx-1`, `/nginx-2`, `/web`, `/api`, `/worker` y `/migrate`, `IMMUTABLE`, `scan_on_push = true`, `AES256`, lifecycle con reglas `untagged` y `any` |
-| `push-image.sh`: `--target` o `--build-arg` con `--from`, target con espacios, `--build-arg` sin `CLAVE=VALOR` | Cada caso termina con su mensaje de error. Con argumentos válidos (`api 1.0.0 --build … --target api`) llega hasta leer el state de ECR |
+| `ECR-module`: `fmt`, `validate`, `plan` | `Plan: 4 to add`: `cloudengineering-dev/nginx-1` y `/countdown-new-year`, `IMMUTABLE`, `scan_on_push = true`, `AES256`, lifecycle con reglas `untagged` y `any` |
+| `push-image.sh`: `--target` o `--build-arg` con `--from`, target con espacios, `--build-arg` sin `CLAVE=VALOR` | Cada caso termina con su mensaje de error. Con argumentos válidos (`mi-api 1.0.0 --build … --target api`) llega hasta leer el state de ECR |
 | Repositorio con mayúsculas (`Nginx`) | **Falla** con la validación |
 | `push-image.sh`: `--help`, sin tag, `latest`, sin modo, dos modos, tag inválido, `--fail-on` inválido, directorio inexistente | Cada caso termina con su mensaje de error |
 | `push-image.sh` sin el ECR aplicado (state vacío) | `ERROR No se pudo leer el output registry_url: ¿está aplicado ECR-module?` |
@@ -270,7 +264,7 @@ terraform plan
 ```bash
 cd ~/ECS-Tests/Terraform/ECR-module/manifests
 terraform init
-terraform plan         # 12 to add (6 repositorios + 6 lifecycle policies)
+terraform plan         # 4 to add (2 repositorios + 2 lifecycle policies)
 terraform apply        # escribe "yes"
 terraform output repository_urls
 ```
@@ -402,8 +396,8 @@ Opciones:
 | `<repositorio>` | Nombre **corto** del repositorio, tal como está en `ecr.auto.tfvars` (por ejemplo `nginx-1`) |
 | `<tag>` | Versión de la imagen, por ejemplo `1.0.0`. **No se permite `latest`** ni un tag que ya exista (repositorios IMMUTABLE) |
 | `--build <dir>` | Construye la imagen desde el `Dockerfile` de ese directorio |
-| `--target <etapa>` | Solo con `--build`: construye una etapa concreta de un Dockerfile multi-stage. El de `apps/online-store/backend` tiene tres: `api`, `worker` y `migrate` |
-| `--build-arg CLAVE=VALOR` | Solo con `--build`: argumento de build; se puede repetir. La `web` fija `API_INTERNAL_URL` al compilar |
+| `--target <etapa>` | Solo con `--build`: construye una etapa concreta de un Dockerfile multi-stage (por ejemplo `--target api`) |
+| `--build-arg CLAVE=VALOR` | Solo con `--build`: argumento de build; se puede repetir (por ejemplo `--build-arg NODE_ENV=production`) |
 | `--from <imagen>` | Copia una imagen existente, por ejemplo de ECR Public o Docker Hub |
 | `--fail-on` | Nivel de vulnerabilidad que hace que el script termine con **código 3**. La imagen queda subida, pero se avisa de que **no conviene desplegarla** |
 
@@ -412,15 +406,11 @@ Opciones:
 ```bash
 cd ~/ECS-Tests/Terraform/ECR-module
 
-# Copiar la imagen oficial de nginx a los repositorios de los servicios de prueba
+# Copiar la imagen oficial de nginx al repositorio del servicio de prueba
 ./push-image.sh nginx-1 1.0.0 --from public.ecr.aws/nginx/nginx:stable-alpine
-./push-image.sh nginx-2 1.0.0 --from public.ecr.aws/nginx/nginx:stable-alpine
 
-# La tienda online: un Dockerfile del backend con 3 etapas (targets) y el frontend
-./push-image.sh api     1.0.0 --build ../../apps/online-store/backend  --target api
-./push-image.sh worker  1.0.0 --build ../../apps/online-store/backend  --target worker
-./push-image.sh migrate 1.0.0 --build ../../apps/online-store/backend  --target migrate
-./push-image.sh web     1.0.0 --build ../../apps/online-store/frontend --build-arg API_INTERNAL_URL=http://api:4000
+# Un Dockerfile multi-stage: construir una sola etapa y pasar argumentos de build
+./push-image.sh mi-api 1.3.0 --build ~/proyectos/mi-api --target api --build-arg NODE_ENV=production
 
 # Construir tu aplicación
 ./push-image.sh mi-api 1.2.0 --build ~/proyectos/mi-api
@@ -541,7 +531,7 @@ terraform apply       # ECS reemplaza las tareas de forma gradual, sin cortar el
 | Cifrado en reposo | ✅ AES256 (KMS con llave propia: mejora pendiente) |
 | Escaneo **mejorado** (Amazon Inspector: continuo, librerías de lenguajes) | ⏳ Pendiente ([pendientes de seguridad](../README.md#seguridad)) |
 | **SBOM** y **firma de imágenes** (Cosign / AWS Signer) | ⏳ Pendiente |
-| Subida desde un **pipeline CI/CD con OIDC**, sin credenciales locales | ⏳ Pendiente |
+| Subida desde un **pipeline CI/CD con OIDC**, sin credenciales locales | ✅ Para `countdown-new-year` ([`GitHub-OIDC-module`](../GitHub-OIDC-module/README.md)); ⏳ pendiente para el resto |
 
 ---
 

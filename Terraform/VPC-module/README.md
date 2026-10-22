@@ -348,8 +348,11 @@ cd Terraform/VPC-module/manifests
 - 9 subredes (3 públicas, 3 privadas y 3 de base de datos) repartidas en 3 AZs distintas
 - 1 Internet Gateway
 - 1 NAT Gateway y 1 Elastic IP
-- Tablas de rutas (pública, privada y de base de datos)
+- 3 tablas de rutas (pública, privada y de base de datos), las 9 asociaciones de las subredes y 2 rutas `0.0.0.0/0` (hacia el Internet Gateway y hacia el NAT)
 - 1 DB Subnet Group
+- 3 recursos "por defecto" que el módulo adopta para dejarlos sin reglas: NACL, tabla de rutas y Security Group por defecto de la VPC
+
+En total, **31 recursos**.
 
 ### Eliminar
 

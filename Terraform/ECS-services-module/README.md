@@ -115,6 +115,7 @@ Valores en [`service.auto.tfvars`](services/nginx-1/manifests/service.auto.tfvar
 
 | Variable | Valor (nginx-1) | Descripción |
 |---|---|---|
+| `aws_region` / `environment` / `business_division` | `us-east-1` / `dev` / `CloudEngineering` | Generales ([`terraform.tfvars`](services/nginx-1/manifests/terraform.tfvars)); deben coincidir con los otros módulos |
 | `service_name` | `nginx-1` | Nombre del servicio y del contenedor (minúsculas, números y `-`; máx. 31 caracteres) |
 | `ecr_repository` | `nginx-1` | Repositorio (clave de `repositories` en ECR-module) |
 | `image_tag` | `1.0.0` | Tag subido con `push-image.sh`. **`latest` no se admite** (validación) |

@@ -25,11 +25,6 @@ module "ecs_cluster" {
     }
   }
 
-  # Default Service Connect namespace of the services of the cluster (ecs-service-connect.tf)
-  service_connect_defaults = {
-    namespace = aws_service_discovery_http_namespace.this.arn
-  }
-
   # Only needed for ECS Managed Instances, not for Fargate
   create_security_group          = false
   create_infrastructure_iam_role = false

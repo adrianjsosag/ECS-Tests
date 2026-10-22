@@ -9,6 +9,4 @@ locals {
   }
   # ECS Cluster name
   cluster_name = "${local.name}-ecs-cluster"
-  # ECS Service Connect namespace (Cloud Map): cloudengineering-dev
-  service_connect_namespace = lower(local.name)
 }

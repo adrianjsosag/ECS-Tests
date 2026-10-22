@@ -18,17 +18,6 @@ output "cluster_id" {
   value       = module.ecs_cluster.id
 }
 
-## service_connect_namespace_arn / service_connect_namespace_name
-output "service_connect_namespace_arn" {
-  description = "ARN of the ECS Service Connect namespace (used by the services that talk to each other)"
-  value       = aws_service_discovery_http_namespace.this.arn
-}
-
-output "service_connect_namespace_name" {
-  description = "Name of the ECS Service Connect namespace"
-  value       = aws_service_discovery_http_namespace.this.name
-}
-
 ## cluster_capacity_providers (FARGATE, FARGATE_SPOT)
 output "cluster_capacity_providers" {
   description = "Capacity providers available in the ECS cluster"

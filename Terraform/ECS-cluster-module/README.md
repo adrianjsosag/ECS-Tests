@@ -6,8 +6,8 @@ Este proyecto crea un **cluster de Amazon ECS** cuyos contenedores se ejecutan *
 |---|---|
 | **Paso en el despliegue** | **3** ([guía](../README.md#guía-de-despliegue-paso-a-paso)) |
 | **Depende de** | Bucket del state ([`S3-tfstate-backend-module`](../S3-tfstate-backend-module/README.md)). **No** depende de la VPC |
-| **Lo usan** | Los servicios ECS que se desplieguen en el cluster (leen `cluster_arn` y el namespace de Service Connect) |
-| **Recursos (`plan`)** | 5 |
+| **Lo usan** | Los servicios ECS que se desplieguen en el cluster (leen `cluster_arn` y `cluster_name`) |
+| **Recursos (`plan`)** | 4 |
 | **Tiempo de despliegue** | ~1 min |
 | **Costo principal** | Casi nada: se pagan las tareas Fargate de los servicios |
 
@@ -47,7 +47,6 @@ Se crea un cluster ECS vacío llamado `CloudEngineering-dev-ecs-cluster`, listo 
 | **Capacity providers** `FARGATE` y `FARGATE_SPOT` | 2 (asociados) | Las dos formas de obtener capacidad sin servidores: normal y Spot (más barata) |
 | **Estrategia por defecto** | 1 | Si un servicio no dice dónde ejecutarse, va a `FARGATE` |
 | **CloudWatch Log Group** `/aws/ecs/CloudEngineering-dev-ecs-cluster` | 1 | Guarda el registro de las sesiones de **ECS Exec**, con 7 días de retención |
-| **Namespace de Service Connect** `cloudengineering-dev` (AWS Cloud Map, tipo HTTP) | 1 | Red interna por nombre entre los servicios del cluster (por ejemplo `http://api:4000`) sin pasar por el ALB. Es el namespace por defecto del cluster |
 
 > 💡 **Analogía:** con Fargate **alquilas un escritorio por cada trabajo, solo mientras dura**. El edificio y el mantenimiento son problema de AWS.
 
@@ -81,7 +80,6 @@ flowchart TB
         fgs["Capacity provider<br/>FARGATE_SPOT<br/>(disponible, opcional)"]
         logs[("CloudWatch Log Group<br/>7 días")]
     end
-    ns[("Cloud Map<br/>namespace cloudengineering-dev")]
 
     subgraph svcs["Servicios ECS (otro proyecto)"]
         svc["Servicio / Tareas<br/>subredes privadas + Security Group propio"]
@@ -90,7 +88,6 @@ flowchart TB
     cluster --- fg
     cluster --- fgs
     cluster --- logs
-    cluster -. "Service Connect por defecto" .- ns
     svc -. "se despliega en" .-> cluster
     svc -. "usa (estrategia)" .-> fg
 ```
@@ -117,7 +114,6 @@ module "ecs_cluster" {
     FARGATE = { weight = 100, base = 1 }
   }
 
-  service_connect_defaults = { namespace = aws_service_discovery_http_namespace.this.arn }
   ...
 }
 ```
@@ -128,7 +124,6 @@ module "ecs_cluster" {
   - **`weight = 100`:** el resto también. Si un servicio quiere usar Spot, lo indica en su propia estrategia, por ejemplo `FARGATE = { base = 1, weight = 1 }` y `FARGATE_SPOT = { weight = 3 }`.
 - **`setting` (Container Insights):** métricas detalladas en CloudWatch. Está en `disabled` para ahorrar.
 - **ECS Exec, configurado automáticamente por el módulo:** el cluster se crea con `execute_command_configuration` en modo `logging = "OVERRIDE"`. Cada sesión de `aws ecs execute-command` queda registrada en el log group `/aws/ecs/CloudEngineering-dev-ecs-cluster` (7 días).
-- **`service_connect_defaults`:** namespace de Cloud Map por defecto para los servicios que usen Service Connect ([`ecs-service-connect.tf`](manifests/ecs-service-connect.tf)).
 - **`create_security_group` / `create_infrastructure_iam_role = false`:** solo hacen falta para *ECS Managed Instances*. Con Fargate no se usan.
 
 ---
@@ -148,12 +143,11 @@ ECS-cluster-module/
     ├── versions.tf                  # Terraform + provider aws
     ├── backend.tf                   # State en el bucket S3 (clave ECS-cluster-module/terraform.tfstate)
     ├── generic-variables.tf         # región, entorno, división
-    ├── local-values.tf              # name, common_tags, cluster_name, service_connect_namespace
+    ├── local-values.tf              # name, common_tags, cluster_name
     ├── terraform.tfvars             # us-east-1 / dev / CloudEngineering
     ├── ecs-variables.tf             # ecs_container_insights
     ├── ecs.auto.tfvars              # valores
-    ├── ecs-service-connect.tf       # Namespace de Service Connect (Cloud Map)
-    ├── ecs-cluster.tf               # Cluster Fargate + capacity providers + namespace por defecto
+    ├── ecs-cluster.tf               # Cluster Fargate + capacity providers
     └── ecs-outputs.tf               # Outputs
 ```
 
@@ -196,7 +190,6 @@ ECS-cluster-module/
 | `cluster_name` | `CloudEngineering-dev-ecs-cluster` | Para desplegar servicios en él |
 | `cluster_arn` / `cluster_id` | Identificadores del cluster | Para referenciarlo desde el proyecto de servicios |
 | `cluster_capacity_providers` | `["FARGATE", "FARGATE_SPOT"]` | Para la estrategia de capacidad de los servicios |
-| `service_connect_namespace_arn` / `service_connect_namespace_name` | ARN y nombre (`cloudengineering-dev`) del namespace de Service Connect | Los servicios que se llaman entre sí por nombre |
 
 ---
 
@@ -210,14 +203,13 @@ terraform validate              # revisa la sintaxis y las referencias
 terraform plan                  # muestra lo que se crearía
 ```
 
-✅ **Verificado** (Terraform v1.17.0, provider AWS 6.70.0): `terraform init -backend=false` + `validate` → `Success! The configuration is valid.` y `fmt -check` sin cambios.
+✅ **Verificado** (Terraform v1.17.0, provider AWS 6.70.0, sin `apply`): `validate` y `fmt -check` correctos y `Plan: 4 to add, 0 to change, 0 to destroy.` Con `ecs_container_insights` distinto de `enabled`/`disabled`, el `plan` falla con la validación.
 
-🔎 **Qué deberías ver en el `plan`: 5 recursos.**
+🔎 **Qué deberías ver en el `plan`: 4 recursos.**
 - `module.ecs_cluster.aws_ecs_cluster.this[0]`
 - `module.ecs_cluster.aws_ecs_cluster_capacity_providers.this[0]`: `FARGATE`, `FARGATE_SPOT` y la estrategia por defecto.
 - `module.ecs_cluster.aws_cloudwatch_log_group.this[0]`
 - `module.ecs_cluster.time_sleep.this[0]`: espera interna del módulo de **20 segundos**; no crea nada en AWS.
-- `aws_service_discovery_http_namespace.this`: el namespace `cloudengineering-dev`.
 
 Todos los recursos llevan las etiquetas `owners = "CloudEngineering"` y `environment = "dev"`.
 
@@ -237,7 +229,7 @@ Todos los recursos llevan las etiquetas `owners = "CloudEngineering"` y `environ
 ```bash
 cd ~/ECS-Tests/Terraform/ECS-cluster-module/manifests
 terraform init
-terraform plan          # Plan: 5 to add
+terraform plan          # Plan: 4 to add
 terraform apply
 terraform output
 ```
@@ -311,7 +303,7 @@ aws ecs execute-command --cluster CloudEngineering-dev-ecs-cluster \
 
 | Recurso | Costo |
 |---|---|
-| Cluster ECS, capacity providers, namespace HTTP de Cloud Map | Gratis |
+| Cluster ECS y capacity providers | Gratis |
 | CloudWatch Log Group | Mínimo (7 días de retención) |
 | Container Insights | `disabled`. Si lo activas, se cobra por métricas |
 | **Tareas Fargate** (cuando despliegues servicios) | Por vCPU y GB de memoria **por segundo**, mientras la tarea corre |

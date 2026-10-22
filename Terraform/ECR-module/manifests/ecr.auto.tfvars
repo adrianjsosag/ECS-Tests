@@ -2,13 +2,9 @@
 # One repository per application. Full name: cloudengineering-dev/<key>
 repositories = {
   nginx-1 = {} # used by ECS-services-module/services/nginx-1
-  nginx-2 = {} # used by ECS-services-module/services/nginx-2
 
-  # Online store (apps/online-store): one repository per image
-  web     = {} # frontend/Dockerfile (Next.js)
-  api     = {} # backend/Dockerfile --target api (NestJS)
-  worker  = {} # backend/Dockerfile --target worker (BullMQ jobs)
-  migrate = {} # backend/Dockerfile --target migrate (Prisma migrations, one-off task)
+  # apps/countdown-new-year: pushed by .github/workflows/countdown-new-year-ci.yml (role of GitHub-OIDC-module)
+  countdown-new-year = {}
 }
 
 ecr_max_image_count      = 10

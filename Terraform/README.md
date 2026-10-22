@@ -2,7 +2,9 @@
 
 Este directorio contiene la infraestructura, escrita en Terraform, para desplegar contenedores en **Amazon ECS con AWS Fargate** (AWS administra los servidores; tú solo defines los contenedores). **No hay modo EC2.**
 
-Está dividida en **6 proyectos independientes** (más **1 opcional**, el Bastion Host), cada uno con su propio state en un bucket S3, que se despliegan **a mano** desde la terminal de **WSL Ubuntu**. El entorno configurado es **`dev`**. El objetivo actual es una prueba de extremo a extremo: **un nginx (`nginx-1`) corriendo en Fargate detrás de un ALB**.
+Está dividida en **7 proyectos independientes** (más **1 opcional**, el Bastion Host), cada uno con su propio state en un bucket S3, que se despliegan **a mano** desde la terminal de **WSL Ubuntu**. El entorno configurado es **`dev`**. El objetivo actual es una prueba de extremo a extremo: **un nginx (`nginx-1`) corriendo en Fargate detrás de un ALB**.
+
+Además, la app [`apps/countdown-new-year`](../apps/countdown-new-year/README.md#ci-con-github-actions) tiene un **CI en GitHub Actions** que construye, prueba y sube su imagen al ECR usando un rol IAM por OIDC ([`GitHub-OIDC-module`](GitHub-OIDC-module/README.md)).
 
 > ⚠️ **Antes de desplegar nada: crea el bucket S3 del state** con [`S3-tfstate-backend-module`](S3-tfstate-backend-module/README.md). Sin él, el `terraform init` de los demás falla con `NoSuchBucket`.
 
@@ -31,6 +33,7 @@ Está dividida en **6 proyectos independientes** (más **1 opcional**, el Bastio
 flowchart TB
     user(("Usuarios<br/>Internet"))
     dev(("Tú"))
+    gha(("GitHub Actions<br/>countdown-new-year-ci"))
 
     subgraph aws["AWS – us-east-1"]
         subgraph vpc["VPC 10.0.0.0/16 (VPC-module) – 3 AZs"]
@@ -53,6 +56,7 @@ flowchart TB
 
     dev -- "terraform" --> tfstate
     dev -- "push-image.sh" --> ecr
+    gha -- "push (rol OIDC, GitHub-OIDC-module)" --> ecr
     user -- "HTTP" --> igw --> alb
     alb -- "regla /* → target group" --> task
     task -- "salida" --> nat --> igw
@@ -73,9 +77,10 @@ flowchart TB
 | [`S3-tfstate-backend-module`](S3-tfstate-backend-module/README.md) | **Una sola vez, antes que todo.** Bucket S3 privado, versionado, cifrado y solo TLS para los states. Su propio state es local | — | 7 |
 | [`VPC-module`](VPC-module/README.md) | VPC, 9 subredes (pública, privada y database × 3 AZs), Internet Gateway, 1 NAT Gateway, tablas de rutas, DB subnet group | — | 31 |
 | [`ALB-module`](ALB-module/README.md) | ALB público, su Security Group y el listener HTTP :80 (404 por defecto) | VPC | 5 |
-| [`ECS-cluster-module`](ECS-cluster-module/README.md) | Cluster ECS **solo Fargate** (`FARGATE` + `FARGATE_SPOT`), log group de ECS Exec y namespace de Service Connect | — | 5 |
-| [`ECR-module`](ECR-module/README.md) | Repositorios privados (IMMUTABLE, escaneo al subir, ciclo de vida) + script **`push-image.sh`** | — | 2 por repositorio (12 hoy) |
+| [`ECS-cluster-module`](ECS-cluster-module/README.md) | Cluster ECS **solo Fargate** (`FARGATE` + `FARGATE_SPOT`), y log group de ECS Exec | — | 4 |
+| [`ECR-module`](ECR-module/README.md) | Repositorios privados (IMMUTABLE, escaneo al subir, ciclo de vida) + script **`push-image.sh`** | — | 2 por repositorio (4 hoy) |
 | [`ECS-services-module`](ECS-services-module/README.md) | Servicio **`nginx-1`**: rol de ejecución, log group, SG, target group, regla del listener, task definition y servicio Fargate | VPC, ALB, cluster, ECR | 10 |
+| [`GitHub-OIDC-module`](GitHub-OIDC-module/README.md) | OIDC provider de GitHub y **un rol IAM por app** para que su workflow de CI suba imágenes al ECR (hoy `CloudEngineering-dev-gha-countdown-new-year`, usado por `countdown-new-year-ci.yml`) | ECR | 1 + 2 por app (3 hoy) |
 | [`EC2-bastion-host-module`](EC2-bastion-host-module/README.md) *(opcional)* | Bastion EC2 (Amazon Linux 2023, `t3.micro`) en una subred pública: Elastic IP, Security Group (SSH), key pair propio y disco cifrado. **No hace falta para nginx-1**: para entrar a los contenedores se usa ECS Exec | VPC | 8 |
 
 ---
@@ -91,10 +96,10 @@ flowchart TB
   | `environment` | `dev` | Entorno: forma parte de nombres, etiquetas y del nombre del bucket |
   | `business_division` | `CloudEngineering` | Área responsable: nombres, etiquetas y nombre del bucket |
 
-- **Nombres:** `<business_division>-<environment>-…` → `CloudEngineering-dev-…` (en minúsculas donde AWS lo exige: bucket, ECR, namespace → `cloudengineering-dev`).
+- **Nombres:** `<business_division>-<environment>-…` → `CloudEngineering-dev-…` (en minúsculas donde AWS lo exige: bucket y ECR → `cloudengineering-dev`).
 - **Etiquetas:** todos los recursos llevan `owners = "CloudEngineering"` y `environment = "dev"` (los servicios, además, `service`).
 - **States:** uno por proyecto en `s3://cloudengineering-dev-tfstate-<cuenta>/<Proyecto>/terraform.tfstate`, con cifrado y bloqueo nativo (`use_lockfile`). Los módulos se leen entre sí con `terraform_remote_state`; el nombre del bucket se calcula con la misma fórmula (`state_bucket` permite cambiarlo).
-- **Los `backend.tf` no admiten variables:** el bucket `cloudengineering-dev-tfstate-373716886058` está escrito en los 6 `backend.tf`. Si cambias de cuenta, de `environment` o de `business_division`, actualízalos (comando en el [README del bucket](S3-tfstate-backend-module/README.md#cómo-funciona)).
+- **Los `backend.tf` no admiten variables:** el bucket `cloudengineering-dev-tfstate-373716886058` está escrito en los 7 `backend.tf`. Si cambias de cuenta, de `environment` o de `business_division`, actualízalos (comando en el [README del bucket](S3-tfstate-backend-module/README.md#cómo-funciona)).
 - **Modo de prueba:** ALB, servicios y Bastion aceptan `remote_state_local_dir` para leer states ficticios locales en lugar de S3 (ver [Probar sin crear nada](#probar-sin-crear-nada)).
 - **Versiones:** Terraform `>= 1.16`, provider `hashicorp/aws ~> 6.67`. Módulos públicos fijados a versión exacta: vpc `6.7.3`, alb `10.5.1`, ecs cluster `7.6.1`, ecr `3.2.0`, ec2-instance `6.4.1`, key-pair `3.0.1`. No hay `.terraform.lock.hcl` en el repositorio: `terraform init` instala la última 6.x del provider (validado con 6.70.0).
 
@@ -111,7 +116,7 @@ flowchart TB
 | bash 4+ | `push-image.sh` |
 
 📋 **Permisos y cuenta:**
-- Permisos en AWS para crear S3, VPC/EC2, ELB, ECS, ECR, IAM (roles), CloudWatch Logs y Cloud Map.
+- Permisos en AWS para crear S3, VPC/EC2, ELB, ECS, ECR, IAM (roles) y CloudWatch Logs.
 - **Rol enlazado de ECS** (solo si la cuenta nunca usó ECS): `aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com`.
 - La cuenta configurada en los `backend.tf` es **`373716886058`**.
 
@@ -128,6 +133,7 @@ flowchart LR
     ecr["4. ECR-module<br/>+ push-image.sh"]
     svc["5. ECS-services-module<br/>nginx-1"]
     bastion["6. EC2-bastion-host-module<br/>(opcional)"]
+    oidc["7. GitHub-OIDC-module<br/>(roles del CI)"]
 
     s3 --> vpc & cluster & ecr
     vpc -. "vpc_id, public_subnets" .-> bastion
@@ -136,6 +142,7 @@ flowchart LR
     alb -- "http_listener_arn, alb_security_group_id, alb_url" --> svc
     cluster -- "cluster_arn, cluster_name" --> svc
     ecr -- "repository_urls / names + imagen subida" --> svc
+    ecr -- "repository_arns" --> oidc
 ```
 
 | # | Módulo | Depende de | Si te saltas el orden… |
@@ -148,6 +155,7 @@ flowchart LR
 | 4 | `ECR-module` + `push-image.sh nginx-1` | Bucket | Sin la imagen: `couldn't find resource` en el `plan` del servicio |
 | 5 | `ECS-services-module/services/nginx-1` | Todos los anteriores | — |
 | 6 | `EC2-bastion-host-module` *(opcional)* | VPC | `Unable to find remote state`. Puede aplicarse en cualquier momento después de la VPC; nadie depende de él |
+| 7 | `GitHub-OIDC-module` | ECR (con el repositorio de cada app) | `Unable to find remote state`, o `precondition failed` si falta el repositorio. Solo hace falta para el CI de GitHub Actions |
 
 Los pasos 2, 3 y 4 son independientes entre sí: pueden aplicarse en cualquier orden después de sus dependencias.
 
@@ -167,7 +175,7 @@ Se puede comprobar **toda la plataforma sin `terraform apply`**, sin el bucket y
      }
    }
    ```
-4. **States ficticios** de los módulos de los que dependen otros (`VPC-module.tfstate`, `ALB-module.tfstate`, `ECS-cluster-module.tfstate`, `ECR-module.tfstate`), con solo los `outputs` que se leen. Ejemplo:
+4. **States ficticios** de los módulos de los que dependen otros (`VPC-module.tfstate`, `ALB-module.tfstate`, `ECS-cluster-module.tfstate`, `ECR-module.tfstate`), con solo los `outputs` que se leen (el de ECR necesita `repository_urls`, `repository_names` y `repository_arns`, con `nginx-1` y `countdown-new-year`). Ejemplo:
    ```json
    {"version":4,"terraform_version":"1.17.0","serial":1,"lineage":"fake-vpc","resources":[],
     "outputs":{
@@ -176,7 +184,7 @@ Se puede comprobar **toda la plataforma sin `terraform apply`**, sin el bucket y
       "public_subnets":{"value":["subnet-0fakepub000001","subnet-0fakepub000002","subnet-0fakepub000003"],"type":["list","string"]},
       "private_subnets":{"value":["subnet-0fakepriv00001","subnet-0fakepriv00002","subnet-0fakepriv00003"],"type":["list","string"]}}}
    ```
-5. **`terraform init -reconfigure`** y **`terraform plan -var remote_state_local_dir=<carpeta de states ficticios>`** (la variable solo existe en ALB, servicios y Bastion).
+5. **`terraform init -reconfigure`** y **`terraform plan -var remote_state_local_dir=<carpeta de states ficticios>`** (la variable solo existe en ALB, servicios, Bastion y `GitHub-OIDC-module`; en el resto basta con `terraform plan`).
 6. **Servicio:** `data "aws_ecr_image"` busca la imagen real en ECR; sin imagen subida, el `plan` falla con `couldn't find resource` (esperado). Para completar el `plan`, en la copia se sustituye ese data source por un digest simulado.
 7. **Borra la carpeta temporal** al terminar.
 
@@ -187,10 +195,11 @@ Se puede comprobar **toda la plataforma sin `terraform apply`**, sin el bucket y
 | `S3-tfstate-backend-module` | ✅ | `7 to add` (bucket `cloudengineering-dev-tfstate-373716886058`) |
 | `VPC-module` | ✅ | `31 to add` |
 | `ALB-module` | ✅ | `5 to add` |
-| `ECS-cluster-module` | ✅ | `5 to add` |
-| `ECR-module` | ✅ | `12 to add` |
+| `ECS-cluster-module` | ✅ | `4 to add` |
+| `ECR-module` | ✅ | `4 to add` |
 | `ECS-services-module/services/nginx-1` | ✅ | `10 to add` (con digest simulado; sin imagen: `couldn't find resource`, esperado) |
 | `EC2-bastion-host-module` | ✅ | `8 to add` |
+| `GitHub-OIDC-module` | ✅ | `3 to add` (provider + rol + política de `countdown-new-year`) |
 
 ---
 
@@ -214,7 +223,7 @@ aws iam create-service-linked-role --aws-service-name ecs.amazonaws.com
 
 📋 **Revisa:**
 - `terraform.tfvars` tiene los **mismos valores** en todos los módulos (`aws_region`, `environment = "dev"`, `business_division`).
-- **El `bucket` de los `backend.tf` es `cloudengineering-dev-tfstate-373716886058`**: si tu cuenta no es `373716886058`, cámbialo en los 6 `backend.tf` (5 + el del Bastion opcional) por el valor de `terraform output state_bucket` del paso 0.
+- **El `bucket` de los `backend.tf` es `cloudengineering-dev-tfstate-373716886058`**: si tu cuenta no es `373716886058`, cámbialo en los 7 `backend.tf` (5 + el de `GitHub-OIDC-module` + el del Bastion opcional) por el valor de `terraform output state_bucket` del paso 0.
 - Recomendado: restringe el ALB a tu IP en `ALB-module/manifests/alb.auto.tfvars` (`alb_allowed_cidrs = ["<tu-ip>/32"]`; tu IP: `curl -s https://checkip.amazonaws.com`). Si vas a usar el Bastion, haz lo mismo con `bastion_ssh_allowed_cidrs` en `EC2-bastion-host-module/manifests/ec2bastion.auto.tfvars`.
 
 ### Paso 0: Bucket S3 del state (una sola vez)
@@ -249,7 +258,7 @@ cd ../..
 
 ```bash
 cd ECS-cluster-module/manifests
-terraform init && terraform apply          # 5 to add
+terraform init && terraform apply          # 4 to add
 cd ../..
 ```
 
@@ -257,7 +266,7 @@ cd ../..
 
 ```bash
 cd ECR-module/manifests
-terraform init && terraform apply          # 12 to add (6 repositorios + 6 lifecycle policies)
+terraform init && terraform apply          # 4 to add (2 repositorios + 2 lifecycle policies)
 cd ..
 ./push-image.sh nginx-1 1.0.0 --from public.ecr.aws/nginx/nginx:stable-alpine
 cd ..
@@ -294,15 +303,28 @@ cd ../..
 
 La llave privada queda **solo en tu PC** (`private-key/*.pem`) y en el state. Destrúyelo cuando termines de usarlo. Detalle: [README del Bastion](EC2-bastion-host-module/README.md).
 
+### Paso 7: Roles del CI de GitHub Actions (`GitHub-OIDC-module`)
+
+**Solo para el CI** de [`apps/countdown-new-year`](../apps/countdown-new-year/README.md#ci-con-github-actions). Necesita el ECR aplicado (paso 4); no depende de la VPC ni del resto.
+
+```bash
+cd GitHub-OIDC-module/manifests
+terraform init && terraform apply          # 3 to add
+terraform output -json role_arns           # → secreto AWS_ROLE_ARN del repositorio de GitHub
+cd ../..
+```
+
+Cada rol indica qué app y qué workflow lo usan ([tabla de roles](GitHub-OIDC-module/README.md#roles-y-quién-los-usa)).
+
 ---
 
 ## Destruir todo (orden inverso)
 
-En orden **inverso**: Bastion (si lo creaste) → servicio → ECR → cluster → ALB → VPC. El bucket del state solo si abandonas la plataforma ([cómo](S3-tfstate-backend-module/README.md#eliminar)).
+En orden **inverso**: Bastion (si lo creaste) → servicio → roles del CI → ECR → cluster → ALB → VPC. El bucket del state solo si abandonas la plataforma ([cómo](S3-tfstate-backend-module/README.md#eliminar)).
 
 ```bash
 cd ~/ECS-Tests/Terraform
-for d in EC2-bastion-host-module ECS-services-module/services/nginx-1 ECR-module ECS-cluster-module ALB-module VPC-module; do
+for d in EC2-bastion-host-module ECS-services-module/services/nginx-1 GitHub-OIDC-module ECR-module ECS-cluster-module ALB-module VPC-module; do
   [ -d "$d" ] || continue
   (cd "$d/manifests" && terraform destroy) || break
 done
@@ -333,6 +355,7 @@ Empieza a cobrarse en cuanto se crea el NAT Gateway (paso 1). **Destruye todo al
 - Tareas en subredes **privadas**, sin IP pública; solo el SG del ALB llega a ellas.
 - Imágenes **IMMUTABLE**, escaneadas al subir y desplegadas **por digest**; `latest` está prohibido en el script y en `image_tag`.
 - States cifrados, versionados y solo por TLS.
+- CI sin llaves de AWS: GitHub Actions usa **OIDC** y un rol por app, limitado a la rama `main` y al repositorio ECR de esa app.
 - Bastion *(opcional)*: disco cifrado, IMDSv2 y la llave privada nunca se copia al servidor. Su SSH está abierto a `0.0.0.0/0` por defecto: restríngelo a tu IP antes de crearlo.
 - ⏳ Pendiente: HTTPS (ACM + listener 443), restringir `alb_allowed_cidrs` (hoy `0.0.0.0/0`), VPC endpoints para ECR/Logs, VPC Flow Logs, KMS propio para el bucket y el ECR, escaneo mejorado (Amazon Inspector).
 
@@ -344,9 +367,9 @@ Empieza a cobrarse en cuanto se crea el NAT Gateway (paso 1). **Destruye todo al
 |---|---|
 | Cuenta del backend fija | Los `backend.tf` apuntan a `cloudengineering-dev-tfstate-373716886058`. En otra cuenta (o con otro `environment`) hay que cambiarlos a mano |
 | Sin `.terraform.lock.hcl` | Las versiones de los providers no están fijadas en el repositorio; conviene versionar el lock tras el primer `init` |
-| Repositorios ECR sin uso | `nginx-2`, `web`, `api`, `worker` y `migrate` se crean vacíos: el código de la tienda (`apps/online-store/`) no está en este repositorio |
 | Subredes database y DB subnet group | Se crean en la VPC, pero ningún módulo las usa hoy |
 | Sin HTTPS ni dominio | El servicio se publica en `http://<dns del ALB>` |
+| El CI no despliega | `countdown-new-year-ci.yml` solo publica la imagen en ECR; todavía no hay un servicio ECS para esa app |
 
 ---
 

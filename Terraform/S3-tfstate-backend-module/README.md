@@ -1,16 +1,16 @@
 # 🪣 AWS S3 State Backend (state de Terraform) – Terraform
 
-Este proyecto crea el **bucket de Amazon S3 donde se guarda el state de Terraform** de todos los demás proyectos de la plataforma: VPC, ALB, cluster ECS, ECR, servicios y el Bastion opcional.
+Este proyecto crea el **bucket de Amazon S3 donde se guarda el state de Terraform** de todos los demás proyectos de la plataforma: VPC, ALB, cluster ECS, ECR, servicios, los roles del CI (`GitHub-OIDC-module`) y el Bastion opcional.
 
 Se aplica **una sola vez, antes que todo lo demás**. Es el único proyecto cuyo state queda **local** (`manifests/terraform.tfstate`), porque no puede guardar su state en un bucket que todavía no existe.
 
-> ⚠️ **Es lo primero que se crea.** Ningún otro proyecto (VPC, ALB, cluster, ECR, servicios) puede hacer `terraform init` sin este bucket: todos guardan su state en él.
+> ⚠️ **Es lo primero que se crea.** Ningún otro proyecto (VPC, ALB, cluster, ECR, servicios, roles del CI, Bastion) puede hacer `terraform init` sin este bucket: todos guardan su state en él.
 
 | 🧭 Ficha rápida | |
 |---|---|
 | **Paso en el despliegue** | **0** – una sola vez, antes que todo ([guía](../README.md#guía-de-despliegue-paso-a-paso)) |
 | **Depende de** | Ningún otro módulo |
-| **Lo usan** | Los 5 proyectos de la plataforma (VPC, ALB, cluster, ECR y cada servicio de `ECS-services-module`, con su propia clave) y el Bastion opcional: guardan su state en este bucket (`backend.tf`) y leen el de los demás (`terraform_remote_state`) |
+| **Lo usan** | Los 5 proyectos de la plataforma (VPC, ALB, cluster, ECR y cada servicio de `ECS-services-module`, con su propia clave), los roles del CI (`GitHub-OIDC-module`) y el Bastion opcional: guardan su state en este bucket (`backend.tf`) y leen el de los demás (`terraform_remote_state`) |
 | **Recursos (`plan`)** | 7 |
 | **Tiempo de despliegue** | Menos de 1 min |
 | **Costo principal** | Prácticamente nada: almacenamiento S3 de unos pocos KB y peticiones |
@@ -51,6 +51,7 @@ s3://cloudengineering-dev-tfstate-373716886058/
 ├── ECR-module/terraform.tfstate
 ├── ECS-services-module/services/
 │   └── nginx-1/terraform.tfstate
+├── GitHub-OIDC-module/terraform.tfstate
 └── EC2-bastion-host-module/terraform.tfstate   (solo si despliegas el Bastion opcional)
 ```
 
@@ -144,7 +145,7 @@ resource "aws_s3_bucket" "tfstate" {
      }
      ```
   2. **`remote-state-datasource.tf`:** lee los states de **otros** proyectos (`backend = "s3"`). El nombre del bucket se calcula con la misma fórmula; la variable `state_bucket` permite cambiarlo.
-- **Los backends no admiten variables.** El nombre del bucket está escrito en los 6 `backend.tf`. Si cambias de cuenta, de entorno o de división, actualízalos todos con un comando:
+- **Los backends no admiten variables.** El nombre del bucket está escrito en los 7 `backend.tf`. Si cambias de cuenta, de entorno o de división, actualízalos todos con un comando:
   ```bash
   cd ~/ECS-Tests/Terraform
   grep -rl 'cloudengineering-dev-tfstate-373716886058' --include=backend.tf . \
@@ -166,6 +167,7 @@ Al revés, **todos** los proyectos dependen de él:
 | [`ECS-cluster-module`](../ECS-cluster-module/README.md) | `ECS-cluster-module/terraform.tfstate` | — |
 | [`ECR-module`](../ECR-module/README.md) | `ECR-module/terraform.tfstate` | — |
 | [`ECS-services-module`](../ECS-services-module/README.md) | `ECS-services-module/services/nginx-1/terraform.tfstate` | VPC, ALB, cluster y ECR |
+| [`GitHub-OIDC-module`](../GitHub-OIDC-module/README.md) | `GitHub-OIDC-module/terraform.tfstate` | ECR |
 | [`EC2-bastion-host-module`](../EC2-bastion-host-module/README.md) *(opcional)* | `EC2-bastion-host-module/terraform.tfstate` | VPC |
 
 ---
@@ -227,7 +229,7 @@ terraform validate
 terraform plan        # solo lee la cuenta de AWS; no crea nada
 ```
 
-✅ **Resultado verificado** (sin `apply`): `Plan: 7 to add, 0 to change, 0 to destroy.`, con el bucket `cloudengineering-dev-tfstate-373716886058`, `AES256`, versiones antiguas a 90 días y la política que deniega el acceso sin TLS.
+✅ **Resultado verificado** (Terraform v1.17.0, provider AWS 6.70.0, sin `apply`): `Plan: 7 to add, 0 to change, 0 to destroy.`, con el bucket `cloudengineering-dev-tfstate-373716886058`, `AES256`, versiones antiguas a 90 días y la política que deniega el acceso sin TLS.
 
 ---
 
@@ -261,7 +263,7 @@ aws s3api get-bucket-encryption     --bucket "$B"   # "SSEAlgorithm": "AES256"
 aws s3api get-public-access-block   --bucket "$B"   # todo en true
 ```
 
-> ⚠️ Si el `output state_bucket` **no** es `cloudengineering-dev-tfstate-373716886058` (otra cuenta u otro entorno), actualiza el `bucket` de los 6 `backend.tf` con el comando de [Cómo funciona](#cómo-funciona) **antes** del `terraform init` de los demás proyectos.
+> ⚠️ Si el `output state_bucket` **no** es `cloudengineering-dev-tfstate-373716886058` (otra cuenta u otro entorno), actualiza el `bucket` de los 7 `backend.tf` con el comando de [Cómo funciona](#cómo-funciona) **antes** del `terraform init` de los demás proyectos.
 
 Después, despliega el resto de la plataforma siguiendo la [guía](../README.md#guía-de-despliegue-paso-a-paso). Cada proyecto se inicializa con `terraform init` y su state se crea directamente en el bucket.
 
@@ -287,7 +289,7 @@ Si un proyecto ya tenía un `terraform.tfstate` **local**, de antes de usar S3, 
 
 ```bash
 cd ~/ECS-Tests/Terraform
-for d in VPC-module ALB-module ECS-cluster-module ECR-module ECS-services-module/services/nginx-1 EC2-bastion-host-module; do
+for d in VPC-module ALB-module ECS-cluster-module ECR-module ECS-services-module/services/nginx-1 GitHub-OIDC-module EC2-bastion-host-module; do
   echo "=== $d" && (cd "$d/manifests" && terraform init -migrate-state) || break
 done
 ```
@@ -333,7 +335,7 @@ done
 
 | Concepto | Costo aproximado |
 |---|---|
-| Almacenamiento | Por GB al mes. Los 6 states del bucket ocupan unos pocos KB, más las versiones de los últimos 90 días |
+| Almacenamiento | Por GB al mes. Los 7 states del bucket ocupan unos pocos KB, más las versiones de los últimos 90 días |
 | Peticiones | Céntimos al mes: cada `plan`/`apply` hace unas pocas lecturas y escrituras, y crea/borra el `.tflock` |
 | Versionado y cifrado SSE-S3 | Sin costo extra (solo el almacenamiento de las versiones) |
 
@@ -345,7 +347,7 @@ En la práctica, **menos de 1 USD al mes**.
 
 | Síntoma | Causa probable | Solución |
 |---|---|---|
-| `BucketAlreadyExists` | El nombre ya existe en otra cuenta (los nombres son globales) | Muy improbable, porque incluye el ID de la cuenta. Cambia `local.state_bucket`, los 6 `backend.tf` y pasa el nombre con la variable `state_bucket` |
+| `BucketAlreadyExists` | El nombre ya existe en otra cuenta (los nombres son globales) | Muy improbable, porque incluye el ID de la cuenta. Cambia `local.state_bucket`, los 7 `backend.tf` y pasa el nombre con la variable `state_bucket` |
 | `BucketAlreadyOwnedByYou` | El bucket ya existe en tu cuenta, creado fuera de este state | Impórtalo (`terraform import aws_s3_bucket.tfstate <bucket>`) o bórralo si está vacío |
 | En otro proyecto: `NoSuchBucket` / `S3 bucket does not exist` al hacer `terraform init` | Aún no se aplicó este módulo, o el `bucket` de `backend.tf` no coincide | Aplica este módulo y revisa `terraform output state_bucket` |
 | `Backend configuration changed` | El proyecto se inicializó antes con otro backend (por ejemplo, local) | `terraform init -migrate-state` (copia el state) o `-reconfigure` (no copia nada) |

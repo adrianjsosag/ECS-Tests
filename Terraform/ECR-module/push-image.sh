@@ -54,8 +54,7 @@ Ejemplos:
   ${SCRIPT_NAME} nginx-1 1.0.0 --from public.ecr.aws/nginx/nginx:stable-alpine
   ${SCRIPT_NAME} mi-api 1.2.0 --build ../../mi-api
   ${SCRIPT_NAME} mi-api 1.2.1 --build . --dockerfile docker/Dockerfile.prod --fail-on HIGH
-  ${SCRIPT_NAME} api 1.0.0 --build ../../apps/online-store/backend --target api
-  ${SCRIPT_NAME} web 1.0.0 --build ../../apps/online-store/frontend --build-arg API_INTERNAL_URL=http://api:4000
+  ${SCRIPT_NAME} mi-api 1.3.0 --build ../../mi-api --target api --build-arg NODE_ENV=production
 
 Repositorios disponibles: ver 'terraform -chdir=${MANIFESTS_DIR} output repository_urls'
 EOF
