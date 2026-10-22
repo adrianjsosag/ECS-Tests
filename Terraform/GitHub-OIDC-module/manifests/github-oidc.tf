@@ -11,6 +11,7 @@
 #     Allows:    push images ONLY to cloudengineering-dev/countdown-new-year, ONLY from the main branch
 #
 # Adding a role for another app: new entry in github_ci_roles (see README "Añadir un rol para otra app").
+# The CD roles of the ECS services (services-cd-plan / services-cd-apply) are in github-services-cd.tf.
 
 # OIDC identity provider of GitHub Actions - only one per AWS account, shared by every role below
 resource "aws_iam_openid_connect_provider" "github" {

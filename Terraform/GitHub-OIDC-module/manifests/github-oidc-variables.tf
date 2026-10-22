@@ -52,3 +52,21 @@ variable "remote_state_local_dir" {
   type        = string
   default     = null
 }
+
+# CD of the ECS services (github-services-cd.tf): plan and apply roles of .github/workflows/terraform-services-cd.yml
+# null = do not create the roles
+variable "services_cd" {
+  description = "CD of the ECS services: workflow that assumes the roles, GitHub environment of the apply job and branches allowed to plan"
+  type = object({
+    workflow_file  = string                           # Workflow that assumes the roles (documentation + tag)
+    environment    = string                           # GitHub environment of the apply job (manual approval)
+    plan_branches  = optional(list(string), ["main"]) # Branches allowed to assume the plan role (pull requests always can)
+    apply_branches = optional(list(string), ["main"]) # Branches allowed to assume the apply role (inside the environment)
+  })
+  default = null
+
+  validation {
+    condition     = var.services_cd == null || can(regex("^[A-Za-z0-9_.-]+$", var.services_cd.environment))
+    error_message = "services_cd.environment must be the name of a GitHub environment, e.g. dev."
+  }
+}

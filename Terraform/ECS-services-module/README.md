@@ -27,8 +27,9 @@ Hoy contiene un solo servicio de prueba: **`nginx-1`**, un nginx oficial copiado
 8. 🧪 [Cómo probarlo sin crear nada (plan)](#cómo-probarlo-sin-crear-nada-plan)
 9. 🚀 [Cómo desplegarlo paso a paso](#cómo-desplegarlo-paso-a-paso)
 10. ➕ [Añadir otro servicio](#añadir-otro-servicio)
-11. 🔒 [Seguridad](#seguridad)
-12. 🛠️ [Problemas frecuentes](#problemas-frecuentes)
+11. 🤖 [Despliegue automático (GitHub Actions)](#despliegue-automático-github-actions)
+12. 🔒 [Seguridad](#seguridad)
+13. 🛠️ [Problemas frecuentes](#problemas-frecuentes)
 
 ---
 
@@ -202,7 +203,27 @@ Destruye el servicio **antes** que el cluster, el ALB y la VPC.
 1. Copia `services/nginx-1/` a `services/<nuevo>/`.
 2. En `backend.tf` cambia la `key` a `ECS-services-module/services/<nuevo>/terraform.tfstate` (**obligatorio**: si no, pisaría el state de nginx-1).
 3. En `service.auto.tfvars` cambia `service_name`, `ecr_repository`, `image_tag`, `listener_rule_priority` (única) y `path_patterns` (por ejemplo `["/nuevo/*"]` con prioridad menor que 100, para que se evalúe antes que `/*`).
-4. Sube su imagen con `push-image.sh` y ejecuta `terraform init && terraform apply`.
+4. Sube su imagen (con el CI de la app o con `push-image.sh`) y despliégalo:
+   - **Con el CD (recomendado):** abre un PR con la carpeta nueva → revisa el `plan` → merge a `main` → aprueba el despliegue. Ver [Despliegue automático](#despliegue-automático-github-actions).
+   - **A mano:** `terraform init && terraform apply` en `services/<nuevo>/manifests`.
+
+---
+
+## Despliegue automático (GitHub Actions)
+
+El workflow [`terraform-services-cd.yml`](../../.github/workflows/terraform-services-cd.yml) despliega los servicios **nuevos o modificados** de `services/`:
+
+| Evento | Qué hace |
+|---|---|
+| Pull request que toca `services/<servicio>/` | Valida la carpeta y muestra el `terraform plan` de cada servicio cambiado |
+| Merge a `main` | Repite el `plan` y, tras la **aprobación manual** del environment `dev`, aplica ese plan |
+| *Run workflow* manual | Los servicios indicados (`all` o una lista) |
+
+Antes de tocar AWS comprueba que la `key` de `backend.tf` corresponde a la carpeta, que `service_name` coincide con la carpeta y que la `listener_rule_priority` no está repetida. Usa dos roles OIDC de [`GitHub-OIDC-module`](../GitHub-OIDC-module/README.md#roles-del-cd-de-servicios): uno de solo lectura para el `plan` y otro, solo para el `apply` aprobado.
+
+> ⚠️ **No destruye** servicios: si borras la carpeta de un servicio, el workflow solo avisa. Ejecuta antes `terraform destroy` a mano.
+
+Detalle, diagramas y configuración: [README-terraform-services-cd.md](../../.github/workflows/README-terraform-services-cd.md).
 
 ---
 

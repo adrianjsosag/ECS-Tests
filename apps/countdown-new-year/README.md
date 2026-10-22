@@ -8,6 +8,8 @@ Tiene un **workflow de CI en GitHub Actions** que construye la imagen Docker, la
 
 1. [Configuración (`.env`)](#configuración-env)
 2. [Ejecutar con Docker](#ejecutar-con-docker)
+   - [Con Docker Compose](#con-docker-compose)
+   - [Sin Compose](#sin-compose)
 3. [Ejecutar en local](#ejecutar-en-local)
 4. [Endpoints](#endpoints)
    - [`GET /health`](#get-health)
@@ -38,6 +40,10 @@ Copia `.env.example` a `.env` y ajusta los valores.
 
 ## Ejecutar con Docker
 
+Todos los comandos se ejecutan desde `apps/countdown-new-year/`, en la terminal de WSL Ubuntu.
+
+### Con Docker Compose
+
 ```bash
 docker compose up -d --build
 ```
@@ -48,12 +54,46 @@ Abre http://localhost:3000. Tras cambiar el `.env`, aplica los cambios con:
 docker compose up -d --force-recreate
 ```
 
-Sin Compose:
+**Ver el estado y los logs:**
+
+```bash
+docker compose ps          # STATUS debe terminar en "(healthy)"
+docker compose logs -f     # Ctrl+C para dejar de seguir los logs (la app sigue corriendo)
+```
+
+**Detener:**
+
+| Comando | Qué hace | Para volver a arrancar |
+|---|---|---|
+| `docker compose stop` | Detiene el contenedor, pero no lo borra | `docker compose start` |
+| `docker compose down` | Detiene **y borra** el contenedor y la red de Compose. La imagen se conserva | `docker compose up -d` |
+| `docker compose down --rmi local` | Igual que `down` y además borra la imagen `countdown-new-year:latest` | `docker compose up -d --build` |
+
+> ℹ️ `restart: unless-stopped` (en [`docker-compose.yml`](docker-compose.yml)) hace que el contenedor vuelva a arrancar solo al reiniciar Docker o WSL, **salvo** que lo hayas detenido con `docker compose stop` o `down`.
+
+### Sin Compose
 
 ```bash
 docker build -t countdown-new-year .
-docker run -d -p 3000:3000 --env-file .env countdown-new-year
+docker run -d --name countdown-new-year -p 3000:3000 --env-file .env countdown-new-year
 ```
+
+**Ver el estado y los logs:**
+
+```bash
+docker ps --filter name=countdown-new-year    # STATUS debe terminar en "(healthy)"
+docker logs -f countdown-new-year             # Ctrl+C para dejar de seguir los logs
+```
+
+**Detener:**
+
+| Comando | Qué hace | Para volver a arrancar |
+|---|---|---|
+| `docker stop countdown-new-year` | Detiene el contenedor (lo conserva) | `docker start countdown-new-year` |
+| `docker rm -f countdown-new-year` | Detiene **y borra** el contenedor | `docker run …` (el comando de arriba) |
+| `docker rmi countdown-new-year` | Borra la imagen (antes, borra el contenedor) | `docker build …` |
+
+> ⚠️ Compose y `docker run` usan el **mismo nombre de contenedor** (`countdown-new-year`) y el mismo puerto `3000`: usa una forma u otra. Si al arrancar ves `Conflict. The container name "/countdown-new-year" is already in use` o `port is already allocated`, detén antes la otra (`docker compose down` o `docker rm -f countdown-new-year`).
 
 ## Ejecutar en local
 
@@ -62,6 +102,8 @@ Requiere Node.js 18+:
 ```bash
 npm start
 ```
+
+**Detener:** `Ctrl+C` en la terminal donde corre (la app cierra el servidor ordenadamente al recibir `SIGINT`/`SIGTERM`).
 
 ## Endpoints
 

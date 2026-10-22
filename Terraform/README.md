@@ -6,6 +6,8 @@ Está dividida en **7 proyectos independientes** (más **1 opcional**, el Bastio
 
 Además, la app [`apps/countdown-new-year`](../apps/countdown-new-year/README.md#ci-con-github-actions) tiene un **CI en GitHub Actions** que construye, prueba y sube su imagen al ECR usando un rol IAM por OIDC ([`GitHub-OIDC-module`](GitHub-OIDC-module/README.md)).
 
+Los servicios de `ECS-services-module` también pueden desplegarse con el **CD en GitHub Actions** [`terraform-services-cd.yml`](../.github/workflows/README-terraform-services-cd.md): `plan` en cada PR y `apply` con aprobación al hacer merge a `main`.
+
 > ⚠️ **Antes de desplegar nada: crea el bucket S3 del state** con [`S3-tfstate-backend-module`](S3-tfstate-backend-module/README.md). Sin él, el `terraform init` de los demás falla con `NoSuchBucket`.
 
 ---
@@ -80,7 +82,7 @@ flowchart TB
 | [`ECS-cluster-module`](ECS-cluster-module/README.md) | Cluster ECS **solo Fargate** (`FARGATE` + `FARGATE_SPOT`), y log group de ECS Exec | — | 4 |
 | [`ECR-module`](ECR-module/README.md) | Repositorios privados (IMMUTABLE, escaneo al subir, ciclo de vida) + script **`push-image.sh`** | — | 2 por repositorio (4 hoy) |
 | [`ECS-services-module`](ECS-services-module/README.md) | Servicio **`nginx-1`**: rol de ejecución, log group, SG, target group, regla del listener, task definition y servicio Fargate | VPC, ALB, cluster, ECR | 10 |
-| [`GitHub-OIDC-module`](GitHub-OIDC-module/README.md) | OIDC provider de GitHub y **un rol IAM por app** para que su workflow de CI suba imágenes al ECR (hoy `CloudEngineering-dev-gha-countdown-new-year`, usado por `countdown-new-year-ci.yml`) | ECR | 1 + 2 por app (3 hoy) |
+| [`GitHub-OIDC-module`](GitHub-OIDC-module/README.md) | OIDC provider de GitHub, **un rol IAM por app** para que su workflow de CI suba imágenes al ECR (hoy `countdown-new-year-ci.yml`) y los roles **plan/apply** del CD de servicios (`terraform-services-cd.yml`) | ECR | 8 |
 | [`EC2-bastion-host-module`](EC2-bastion-host-module/README.md) *(opcional)* | Bastion EC2 (Amazon Linux 2023, `t3.micro`) en una subred pública: Elastic IP, Security Group (SSH), key pair propio y disco cifrado. **No hace falta para nginx-1**: para entrar a los contenedores se usa ECS Exec | VPC | 8 |
 
 ---
@@ -155,7 +157,7 @@ flowchart LR
 | 4 | `ECR-module` + `push-image.sh nginx-1` | Bucket | Sin la imagen: `couldn't find resource` en el `plan` del servicio |
 | 5 | `ECS-services-module/services/nginx-1` | Todos los anteriores | — |
 | 6 | `EC2-bastion-host-module` *(opcional)* | VPC | `Unable to find remote state`. Puede aplicarse en cualquier momento después de la VPC; nadie depende de él |
-| 7 | `GitHub-OIDC-module` | ECR (con el repositorio de cada app) | `Unable to find remote state`, o `precondition failed` si falta el repositorio. Solo hace falta para el CI de GitHub Actions |
+| 7 | `GitHub-OIDC-module` | ECR (con el repositorio de cada app) | `Unable to find remote state`, o `precondition failed` si falta el repositorio. Solo hace falta para el CI y el CD de GitHub Actions |
 
 Los pasos 2, 3 y 4 son independientes entre sí: pueden aplicarse en cualquier orden después de sus dependencias.
 
@@ -199,7 +201,7 @@ Se puede comprobar **toda la plataforma sin `terraform apply`**, sin el bucket y
 | `ECR-module` | ✅ | `4 to add` |
 | `ECS-services-module/services/nginx-1` | ✅ | `10 to add` (con digest simulado; sin imagen: `couldn't find resource`, esperado) |
 | `EC2-bastion-host-module` | ✅ | `8 to add` |
-| `GitHub-OIDC-module` | ✅ | `3 to add` (provider + rol + política de `countdown-new-year`) |
+| `GitHub-OIDC-module` | ✅ | `8 to add` (provider, rol y política de `countdown-new-year`, y 2 roles + 3 políticas del CD de servicios) |
 
 ---
 
@@ -303,14 +305,15 @@ cd ../..
 
 La llave privada queda **solo en tu PC** (`private-key/*.pem`) y en el state. Destrúyelo cuando termines de usarlo. Detalle: [README del Bastion](EC2-bastion-host-module/README.md).
 
-### Paso 7: Roles del CI de GitHub Actions (`GitHub-OIDC-module`)
+### Paso 7: Roles de GitHub Actions (`GitHub-OIDC-module`)
 
-**Solo para el CI** de [`apps/countdown-new-year`](../apps/countdown-new-year/README.md#ci-con-github-actions). Necesita el ECR aplicado (paso 4); no depende de la VPC ni del resto.
+**Solo para el CI** de [`apps/countdown-new-year`](../apps/countdown-new-year/README.md#ci-con-github-actions) **y el CD de servicios** ([`terraform-services-cd.yml`](../.github/workflows/README-terraform-services-cd.md)). Necesita el ECR aplicado (paso 4); no depende de la VPC ni del resto.
 
 ```bash
 cd GitHub-OIDC-module/manifests
-terraform init && terraform apply          # 3 to add
-terraform output -json role_arns           # → secreto AWS_ROLE_ARN del repositorio de GitHub
+terraform init && terraform apply          # 8 to add
+terraform output -json role_arns           # → secreto AWS_ROLE_ARN (CI de countdown-new-year)
+terraform output -json services_cd_role_arns  # → secretos AWS_SERVICES_PLAN_ROLE_ARN / AWS_SERVICES_APPLY_ROLE_ARN (CD)
 cd ../..
 ```
 
@@ -356,6 +359,7 @@ Empieza a cobrarse en cuanto se crea el NAT Gateway (paso 1). **Destruye todo al
 - Imágenes **IMMUTABLE**, escaneadas al subir y desplegadas **por digest**; `latest` está prohibido en el script y en `image_tag`.
 - States cifrados, versionados y solo por TLS.
 - CI sin llaves de AWS: GitHub Actions usa **OIDC** y un rol por app, limitado a la rama `main` y al repositorio ECR de esa app.
+- CD de servicios: los PR solo pueden hacer `plan` (rol de solo lectura); el `apply` exige aprobación en el environment `dev`, la rama `main` y un rol limitado a los recursos de un servicio.
 - Bastion *(opcional)*: disco cifrado, IMDSv2 y la llave privada nunca se copia al servidor. Su SSH está abierto a `0.0.0.0/0` por defecto: restríngelo a tu IP antes de crearlo.
 - ⏳ Pendiente: HTTPS (ACM + listener 443), restringir `alb_allowed_cidrs` (hoy `0.0.0.0/0`), VPC endpoints para ECR/Logs, VPC Flow Logs, KMS propio para el bucket y el ECR, escaneo mejorado (Amazon Inspector).
 
