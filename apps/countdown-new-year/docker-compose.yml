@@ -1,0 +1,9 @@
+services:
+  countdown:
+    build: .
+    image: countdown-new-year:latest
+    container_name: countdown-new-year
+    env_file: .env
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    restart: unless-stopped
