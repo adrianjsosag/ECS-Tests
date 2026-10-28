@@ -1,0 +1,11 @@
+# Terraform working directories and local states (every state lives in the bucket of its environment)
+.terraform/
+*.tfstate
+*.tfstate.*
+# Plans and override files (bootstrap.sh and the tests create *_override.tf temporarily)
+tfplan
+*.tfplan
+plan.txt
+*_override.tf
+# Private SSH key of the optional Bastion Host
+modules/EC2-bastion-host-module/manifests/private-key/
